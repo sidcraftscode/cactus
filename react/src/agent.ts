@@ -77,10 +77,10 @@ export class Agent {
     }
 
     try {
-      console.log('Starting system prompt caching...')
+      Telemetry.info('Starting system prompt caching...')
       const systemMessage = this.conversationHistory.find(msg => msg.role === 'system')
       if (!systemMessage) {
-        console.log('No system message found for caching')
+        Telemetry.warn('No system message found for caching')
         return
       }
       
