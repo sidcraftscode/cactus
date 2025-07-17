@@ -98,10 +98,10 @@ export class Agent {
       await Promise.race([cachePromise, timeoutPromise])
       
       this.systemPromptCached = true
-      console.log('System prompt cached successfully')
+      Telemetry.info('System prompt cached successfully')
     } catch (error) {
       console.error('Failed to cache system prompt:', error)
-      console.log('Continuing without system prompt cache - performance may be slower')
+      Telemetry.info('Continuing without system prompt cache - performance may be slower')
       this.systemPromptCached = true
     }
   }
