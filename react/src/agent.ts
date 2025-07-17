@@ -129,7 +129,7 @@ export class Agent {
     recursionLimit: number = 3
   ): Promise<NativeCompletionResult> {
     if (recursionCount >= recursionLimit) {
-      console.log(`Recursion limit reached (${recursionCount}/${recursionLimit}), returning final completion`)
+      Telemetry.log(`Recursion limit reached (${recursionCount}/${recursionLimit}), returning final completion`, 'info')
       
       const contextMessages = this._buildContextMessages()
       return await this.context.completion({
