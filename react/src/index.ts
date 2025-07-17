@@ -29,6 +29,7 @@ import type { CactusMessagePart, CactusOAICompatibleMessage } from './chat'
 import { formatChat } from './chat'
 import { Tools, parseAndExecuteTool } from './tools'
 import { Telemetry, type TelemetryParams } from './telemetry'
+import type { AgentReturn, AgentCompletionParams } from './agent'
 export type {
   NativeContextParams,
   NativeLlamaContext,
@@ -45,13 +46,15 @@ export type {
   CactusOAICompatibleMessage,
   JinjaFormattedChatResult,
   NativeAudioDecodeResult,
+  AgentReturn,
+  AgentCompletionParams,
 
   // Deprecated
   SchemaGrammarConverterPropOrder,
   SchemaGrammarConverterBuiltinRule,
 }
 
-export { SchemaGrammarConverter, convertJsonSchemaToGrammar, Tools }
+export { SchemaGrammarConverter, convertJsonSchemaToGrammar, Tools, parseAndExecuteTool }
 export * from './remote'
 
 const EVENT_ON_INIT_CONTEXT_PROGRESS = '@Cactus_onInitContextProgress'
@@ -677,3 +680,4 @@ export const getDeviceInfo = async (contextId: number): Promise<NativeDeviceInfo
 export { CactusLM } from './lm';
 export { CactusVLM } from './vlm';
 export { CactusTTS } from './tts';
+export { Agent } from './agent';
