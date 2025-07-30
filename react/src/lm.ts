@@ -1,4 +1,6 @@
 import { initLlama, LlamaContext } from './index'
+// @ts-ignore
+import { Platform } from 'react-native'
 import type {
   ContextParams,
   CompletionParams,
@@ -7,8 +9,10 @@ import type {
   EmbeddingParams,
   NativeEmbeddingResult,
 } from './index'
+
 import { Telemetry } from './telemetry'
 import { setCactusToken, getVertexAIEmbedding } from './remote'
+import { ConversationHistoryManager } from './chat'
 
 interface CactusLMReturn {
   lm: CactusLM | null
@@ -16,10 +20,20 @@ interface CactusLMReturn {
 }
 
 export class CactusLM {
-  private context: LlamaContext
+  protected context: LlamaContext
+  protected conversationHistoryManager: ConversationHistoryManager
 
-  private constructor(context: LlamaContext) {
+  // the initPromise enables a "async singleton" initialization pattern which
+  // protects against a race condition in the event of multiple init attempts
+  private static _initCache: Map<string, Promise<CactusLMReturn>> = new Map();
+
+  private static getCacheKey(params: ContextParams, cactusToken?: string, retryOptions?: { maxRetries?: number; delayMs?: number }): string {
+    return JSON.stringify({ params, cactusToken, retryOptions });
+  }
+
+  protected constructor(context: LlamaContext) {
     this.context = context
+    this.conversationHistoryManager = new ConversationHistoryManager()
   }
 
   static async init(
@@ -28,72 +42,108 @@ export class CactusLM {
     cactusToken?: string,
     retryOptions?: { maxRetries?: number; delayMs?: number },
   ): Promise<CactusLMReturn> {
+
     if (cactusToken) {
       setCactusToken(cactusToken);
     }
 
-    const maxRetries = retryOptions?.maxRetries ?? 3;
-    const delayMs = retryOptions?.delayMs ?? 1000;
+    const key = CactusLM.getCacheKey(params, cactusToken, retryOptions);
+    if (CactusLM._initCache.has(key)) {
+      // concurrent initialization calls with the same params all get the same cached Promise
+      return CactusLM._initCache.get(key)!;
+    }
 
-    const configs = [
-      params,
-      { ...params, n_gpu_layers: 0 } 
-    ];
+    const initPromise = (async () => {
+      const maxRetries = retryOptions?.maxRetries ?? 3;
+      const delayMs = retryOptions?.delayMs ?? 1000;
 
-    const sleep = (ms: number): Promise<void> => {
-      return new Promise(resolve => {
-        const start = Date.now();
-        const wait = () => {
-          if (Date.now() - start >= ms) {
-            resolve();
-          } else {
-            Promise.resolve().then(wait);
-          }
-        };
-        wait();
-      });
-    };
+      const configs = [
+        params,
+        { ...params, n_gpu_layers: 0 }
+      ];
 
-    for (const config of configs) {
-      let lastError: Error | null = null;
-      
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          const context = await initLlama(config, onProgress);
-          return { lm: new CactusLM(context), error: null };
-        } catch (e) {
-          lastError = e as Error;
-          const isLastConfig = configs.indexOf(config) === configs.length - 1;
-          const isLastAttempt = attempt === maxRetries;
-          
-          Telemetry.error(e as Error, {
-            n_gpu_layers: config.n_gpu_layers ?? null,
-            n_ctx: config.n_ctx ?? null,
-            model: config.model ?? null,
-          });
-          
-          if (!isLastAttempt) {
-            const delay = delayMs * Math.pow(2, attempt - 1);
-            await sleep(delay);
-          } else if (!isLastConfig) {
-            break;
+      const sleep = (ms: number): Promise<void> => {
+        return new Promise(resolve => {
+          const start = Date.now();
+          const wait = () => {
+            if (Date.now() - start >= ms) {
+              resolve();
+            } else {
+              Promise.resolve().then(wait);
+            }
+          };
+          wait();
+        });
+      };
+
+      for (const config of configs) {
+        let lastError: Error | null = null;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            const context = await initLlama(config, onProgress);
+            return { lm: new CactusLM(context), error: null };
+          } catch (e) {
+            lastError = e as Error;
+            const isLastConfig = configs.indexOf(config) === configs.length - 1;
+            const isLastAttempt = attempt === maxRetries;
+
+            Telemetry.error(e as Error, {
+              n_gpu_layers: config.n_gpu_layers ?? null,
+              n_ctx: config.n_ctx ?? null,
+              model: config.model ?? null,
+            });
+
+            if (!isLastAttempt) {
+              const delay = delayMs * Math.pow(2, attempt - 1);
+              await sleep(delay);
+            } else if (!isLastConfig) {
+              break;
+            }
           }
         }
+
+        if (configs.indexOf(config) === configs.length - 1 && lastError) {
+          return { lm: null, error: lastError };
+        }
       }
-      
-      if (configs.indexOf(config) === configs.length - 1 && lastError) {
-        return { lm: null, error: lastError };
-      }
+      return { lm: null, error: new Error('Failed to initialize CactusLM after all retries') };
+    })();
+
+    CactusLM._initCache.set(key, initPromise);
+
+    const result = await initPromise;
+    if (result.error) {
+      CactusLM._initCache.delete(key); // Reset on failure to allow retries
     }
-    return { lm: null, error: new Error('Failed to initialize CactusLM after all retries') };
+    return result;
   }
 
-  async completion(
+  completion = async (
     messages: CactusOAICompatibleMessage[],
     params: CompletionParams = {},
     callback?: (data: any) => void,
-  ): Promise<NativeCompletionResult> {
-    return await this.context.completion({ messages, ...params }, callback);
+  ): Promise<NativeCompletionResult> => {
+    const { newMessages, requiresReset } =
+      this.conversationHistoryManager.processNewMessages(messages);
+
+    if (requiresReset) {
+      this.context?.rewind();
+      this.conversationHistoryManager.reset();
+    }
+
+    if (newMessages.length === 0) {
+      console.warn('No messages to complete!');
+    }
+
+    const result = await this.context.completion({ messages: newMessages, ...params }, callback);
+
+    this.conversationHistoryManager.update(newMessages, {
+      role: 'assistant',
+      content: result.content,
+    });
+
+    return result;
   }
 
   async embedding(
@@ -136,23 +186,27 @@ export class CactusLM {
     return result;
   }
 
-  private async _handleLocalEmbedding(text: string, params?: EmbeddingParams): Promise<NativeEmbeddingResult> {
+  protected async _handleLocalEmbedding(text: string, params?: EmbeddingParams): Promise<NativeEmbeddingResult> {
     return this.context.embedding(text, params);
   }
 
-  private async _handleRemoteEmbedding(text: string): Promise<NativeEmbeddingResult> {
+  protected async _handleRemoteEmbedding(text: string): Promise<NativeEmbeddingResult> {
     const embeddingValues = await getVertexAIEmbedding(text);
     return {
       embedding: embeddingValues,
     };
   }
 
-  async rewind(): Promise<void> {
-    // @ts-ignore
+  rewind = async (): Promise<void> => {
     return this.context?.rewind()
   }
 
   async release(): Promise<void> {
     return this.context.release()
   }
+
+  async stopCompletion(): Promise<void> {
+    return await this.context.stopCompletion()
+  }
+
 } 

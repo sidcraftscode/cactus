@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, View, Text, Alert } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, View, Text, Alert, Button } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { cactus, Message } from '../cactus';
 import { Header, MessageBubble, MessageField, LoadingScreen } from '../components';
 
+const systemPrompt = 'You are a helpful AI assistant. Always provide neat, straightforward, short and relevant responses. Be concise and direct.';
+
 export default function HomeScreen() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>([
+    { role: 'system', content: systemPrompt }
+  ]);
   const [message, setMessage] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
@@ -15,6 +19,10 @@ export default function HomeScreen() {
   useEffect(() => {
     const initializeCactus = async () => {
       try {
+        // Stress-test: initialize & release 10 times to verify memory stability
+        await cactus.stressInitialize(10, (p) => setInitProgress(p));
+
+        // Final initialization for actual usage
         await cactus.initialize((progress) => {
           setInitProgress(progress);
         });
@@ -37,13 +45,14 @@ export default function HomeScreen() {
       images: attachedImages.length > 0 ? attachedImages : undefined
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
     setMessage('');
     setAttachedImages([]);
     setIsGenerating(true);
 
     try {
-      const response = await cactus.generateResponse(userMessage);
+      const response = await cactus.generateResponse(newMessages);
       
       const assistantMessage: Message = {
         role: 'assistant',
@@ -84,7 +93,6 @@ export default function HomeScreen() {
           onPress: () => {
             cactus.clearConversation();
             setMessages([]);
-            console.log('Conversation cleared');
           }
         }
       ]

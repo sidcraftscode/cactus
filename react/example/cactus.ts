@@ -89,15 +89,12 @@ class CactusManager {
     this.isInitialized = true;
   }
 
-  async generateResponse( userMessage: Message): Promise<string> {
+  async generateResponse( messages: Message[]): Promise<string> {
     if (!this.vlm) {
       throw new Error('Cactus VLM not initialized');
     }
 
-    const messages = [
-      { role: 'system', content: 'You are a helpful AI assistant. Always provide neat, straightforward, short and relevant responses. Be concise and direct.' },
-      { role: 'user', content: userMessage.content }
-    ];
+    const userMessage = messages[messages.length - 1];
     
     const params = {
       images: userMessage.images,
@@ -142,6 +139,23 @@ class CactusManager {
 
   getIsInitialized(): boolean {
     return this.isInitialized;
+  }
+
+  async stressInitialize(
+    count: number = 10,
+    onProgress: (progress: number) => void = () => {},
+  ): Promise<void> {
+    for (let i = 0; i < count; i++) {
+      console.log(`[Cactus] stress init ${i + 1}/${count} starting`);
+      await this.initialize(onProgress);
+      console.log(`[Cactus] stress init ${i + 1}/${count} finished`);
+      // Release to ensure native memory is freed before the next pass
+      if (this.vlm) {
+        await this.vlm.release();
+      }
+      this.vlm = null;
+      this.isInitialized = false;
+    }
   }
 }
 
